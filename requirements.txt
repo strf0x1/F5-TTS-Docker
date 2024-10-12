@@ -10,8 +10,8 @@ jiwer
 librosa
 matplotlib
 pypinyin
-torch>=2.0
-torchaudio>=2.3.0
+# torch>=2.0
+# torchaudio>=2.3.0
 torchdiffeq
 tqdm>=4.65.0
 transformers
@@ -20,3 +20,5 @@ wandb
 x_transformers>=1.31.14
 zhconv
 zhon
+gradio=5.0.2
+cached_path0=1.6.3
