@@ -8,7 +8,7 @@
 **E2 TTS**: Flat-UNet Transformer, closest reproduction.\
 **Sway Sampling**: Inference-time flow step sampling strategy, greatly improves performance
 
-## Installation
+## Installation and running inference
 1. Clone this repository.
    ```
    git clone https://github.com/PasiKoodaa/F5-TTS
