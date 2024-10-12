@@ -9,15 +9,41 @@
 **Sway Sampling**: Inference-time flow step sampling strategy, greatly improves performance
 
 ## Installation
-Clone this repository.
-```bash
-git clone git@github.com:SWivid/F5-TTS.git
-cd F5-TTS
-```
-Install packages.
-```bash
-pip install -r requirements.txt
-```
+1. Clone this repository.
+   ```
+   git clone https://github.com/PasiKoodaa/F5-TTS
+   cd F5-TTS
+   ```
+
+2. Create a new conda environment:
+   ```
+   conda create -n F5-TTS python=3.10
+   ```
+
+3. Activate the environment:
+   ```
+   conda activate F5-TTS
+   ```
+5. Install the right torch for your system
+   ```
+   https://pytorch.org/get-started/locally/
+
+   Tested with: pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
+
+   ```
+
+5. Install the required packages:
+   ```
+   pip install -r requirements.txt
+
+   ```
+
+
+6. Run the Gradio-app
+   ```
+   python app_local.py
+   ```
+
 
 ## Prepare Dataset
 Example data processing scripts for Emilia and Wenetspeech4TTS, and you may tailor your own one along with a Dataset class in `model/dataset.py`.
