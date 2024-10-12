@@ -134,7 +134,8 @@ def get_tokenizer(dataset_name, tokenizer: str = "pinyin"):
                 - if use "byte", set to 256 (unicode byte range) 
     ''' 
     if tokenizer in ["pinyin", "char"]:
-        with open (f"data/{dataset_name}_{tokenizer}/vocab.txt", "r") as f:
+        vocab_file_path = f"data/{dataset_name}_{tokenizer}/vocab.txt"
+        with open(vocab_file_path, "r", encoding="utf-8") as f:
             vocab_char_map = {}
             for i, char in enumerate(f):
                 vocab_char_map[char[:-1]] = i
