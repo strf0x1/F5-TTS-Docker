@@ -1,5 +1,5 @@
 
-##**This forked version introduces chunking of the input text, allowing for the generation of audio files of any length without limitations. Additionally, the VRAM usage remains under 8 GB.**
+##This forked version introduces chunking of the input text, allowing for the generation of audio files of any length without limitations. Additionally, the VRAM usage remains under 8 GB.**
 
 # F5-TTS: A Fairytaler that Fakes Fluent and Faithful Speech with Flow Matching
 
