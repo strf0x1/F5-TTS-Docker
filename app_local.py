@@ -31,6 +31,9 @@ torch.cuda.empty_cache()
 
 print(f"Using {device} device")
 
+# Global variables to store loaded models
+loaded_models = {}
+
 
 # --------------------- Settings -------------------- #
 
@@ -72,30 +75,54 @@ def load_model(exp_name, model_cls, model_cfg, ckpt_step):
 
     return ema_model, model
 
-# load models
-F5TTS_model_cfg = dict(dim=1024, depth=22, heads=16, ff_mult=2, text_dim=512, conv_layers=4)
-E2TTS_model_cfg = dict(dim=1024, depth=24, heads=16, ff_mult=4)
+def get_model(exp_name):
+    if exp_name not in loaded_models:
+        if exp_name == "F5-TTS":
+            model_cfg = dict(dim=1024, depth=22, heads=16, ff_mult=2, text_dim=512, conv_layers=4)
+            ema_model, base_model = load_model("F5TTS_Base", DiT, model_cfg, 1200000)
+        elif exp_name == "E2-TTS":
+            model_cfg = dict(dim=1024, depth=24, heads=16, ff_mult=4)
+            ema_model, base_model = load_model("E2TTS_Base", UNetT, model_cfg, 1200000)
+        else:
+            raise ValueError(f"Unknown model: {exp_name}")
+        
+        loaded_models[exp_name] = (ema_model, base_model)
+    
+    return loaded_models[exp_name]
 
-F5TTS_ema_model, F5TTS_base_model = load_model("F5TTS_Base", DiT, F5TTS_model_cfg, 1200000)
-E2TTS_ema_model, E2TTS_base_model = load_model("E2TTS_Base", UNetT, E2TTS_model_cfg, 1200000)
+# load models
+# F5TTS_model_cfg = dict(dim=1024, depth=22, heads=16, ff_mult=2, text_dim=512, conv_layers=4)
+# E2TTS_model_cfg = dict(dim=1024, depth=24, heads=16, ff_mult=4)
+
+# F5TTS_ema_model, F5TTS_base_model = load_model("F5TTS_Base", DiT, F5TTS_model_cfg, 1200000)
+# E2TTS_ema_model, E2TTS_base_model = load_model("E2TTS_Base", UNetT, E2TTS_model_cfg, 1200000)
 
 def chunk_text(text, max_chars=200):
     chunks = []
     current_chunk = ""
-    sentences = re.split(r'(?<=[.!?])\s+', text)
+    paragraphs = text.split('\n\n')
     
-    for sentence in sentences:
-        if len(current_chunk) + len(sentence) <= max_chars:
-            current_chunk += sentence + " "
-        else:
-            if current_chunk:
-                chunks.append(current_chunk.strip())
-            current_chunk = sentence + " "
+    for paragraph in paragraphs:
+        sentences = re.split(r'(?<=[.!?])\s+', paragraph)
+        for sentence in sentences:
+            if len(current_chunk) + len(sentence) <= max_chars:
+                current_chunk += sentence + " "
+            else:
+                if current_chunk:
+                    chunks.append((current_chunk.strip(), False))  # Not a new paragraph
+                current_chunk = sentence + " "
+        
+        if current_chunk:
+            chunks.append((current_chunk.strip(), True))  # Mark as new paragraph
+            current_chunk = ""
     
     if current_chunk:
-        chunks.append(current_chunk.strip())
+        chunks.append((current_chunk.strip(), True))  # Last chunk is always marked as new paragraph
     
     return chunks
+
+
+
 
 def save_spectrogram(y, sr, path):
     plt.figure(figsize=(10, 4))
@@ -107,9 +134,37 @@ def save_spectrogram(y, sr, path):
     plt.savefig(path)
     plt.close()
 
+def add_pause(duration, sample_rate):
+    return np.zeros(int(duration * sample_rate))
+
+def process_audio_with_pauses(audio_chunks, sample_rate, chunk_info, remove_silence=True):
+    processed_chunks = []
+    for i, (chunk, is_new_paragraph) in enumerate(zip(audio_chunks, chunk_info)):
+        if remove_silence:
+            # Remove silence from the chunk
+            non_silent_intervals = librosa.effects.split(chunk, top_db=30)
+            non_silent_wave = np.concatenate([chunk[start:end] for start, end in non_silent_intervals])
+            processed_chunks.append(non_silent_wave)
+        else:
+            processed_chunks.append(chunk)
+        
+        # Add pause after each chunk except the last one
+        if i < len(audio_chunks) - 1:
+            if is_new_paragraph:
+                processed_chunks.append(add_pause(0.5, sample_rate))  # Longer pause for paragraphs (0.5 seconds)
+            else:
+                processed_chunks.append(add_pause(0.2, sample_rate))  # Shorter pause for sentences (0.2 seconds)
+
+    return np.concatenate(processed_chunks)
+
+
+
 def infer(ref_audio_orig, ref_text, gen_text, exp_name, remove_silence):
     print(gen_text)
+
     chunks = chunk_text(gen_text)
+    results = []
+    chunk_info = []
     
     if not chunks:
         raise gr.Error("Please enter some text to generate.")
@@ -125,21 +180,15 @@ def infer(ref_audio_orig, ref_text, gen_text, exp_name, remove_silence):
         aseg.export(f.name, format="wav")
         ref_audio = f.name
 
-    # Select model
-    if exp_name == "F5-TTS":
-        ema_model = F5TTS_ema_model
-        base_model = F5TTS_base_model
-    elif exp_name == "E2-TTS":
-        ema_model = E2TTS_ema_model
-        base_model = E2TTS_base_model
+    # Load the selected model
+    ema_model, base_model = get_model(exp_name)
 
     # Transcribe reference audio if needed
     if not ref_text.strip():
         gr.Info("No reference text provided, transcribing reference audio...")
-        # Initialize Whisper model
         pipe = pipeline(
             "automatic-speech-recognition",
-            model="openai/whisper-large-v3-Turbo", # You can set this to large-V3 if you want better quality, but VRAM then goes to 10 GB
+            model="openai/whisper-large-v3-Turbo",
             torch_dtype=torch.float16,
             device=device,
         )
@@ -150,9 +199,8 @@ def infer(ref_audio_orig, ref_text, gen_text, exp_name, remove_silence):
             generate_kwargs={"task": "transcribe"},
             return_timestamps=False,
         )['text'].strip()
-        print("\nTranscribed text: ", ref_text) # Degug transcribing quality
+        print("\nTranscribed text: ", ref_text)
         gr.Info("\nFinished transcription")
-        # Release Whisper model
         del pipe
         torch.cuda.empty_cache()
         gc.collect()
@@ -162,7 +210,7 @@ def infer(ref_audio_orig, ref_text, gen_text, exp_name, remove_silence):
     # Load and preprocess reference audio
     audio, sr = torchaudio.load(ref_audio)
     if audio.shape[0] > 1:
-        audio = torch.mean(audio, dim=0, keepdim=True) # convert to mono
+        audio = torch.mean(audio, dim=0, keepdim=True)
     rms = torch.sqrt(torch.mean(torch.square(audio)))
     if rms < target_rms:
         audio = audio * target_rms / rms
@@ -175,7 +223,7 @@ def infer(ref_audio_orig, ref_text, gen_text, exp_name, remove_silence):
     results = []
     spectrograms = []
     
-    for i, chunk in enumerate(chunks):
+    for i, (chunk, is_new_paragraph) in enumerate(chunks):
         gr.Info(f"Processing chunk {i+1}/{len(chunks)}: {chunk[:30]}...")
         
         # Prepare the text
@@ -204,7 +252,6 @@ def infer(ref_audio_orig, ref_text, gen_text, exp_name, remove_silence):
         generated = generated[:, ref_audio_len:, :]
         generated_mel_spec = rearrange(generated, '1 n d -> 1 d n')
         
-        # Clear unnecessary tensors
         del generated
         torch.cuda.empty_cache()
         
@@ -214,12 +261,12 @@ def infer(ref_audio_orig, ref_text, gen_text, exp_name, remove_silence):
         if rms < target_rms:
             generated_wave = generated_wave * rms / target_rms
 
-        # Convert to numpy and clear GPU tensors
         generated_wave = generated_wave.squeeze().cpu().numpy()
         del generated_mel_spec
         torch.cuda.empty_cache()
 
         results.append(generated_wave)
+        chunk_info.append(is_new_paragraph)
 
         # Generate spectrogram
         with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp_spectrogram:
@@ -227,33 +274,21 @@ def infer(ref_audio_orig, ref_text, gen_text, exp_name, remove_silence):
             save_spectrogram(generated_wave, target_sample_rate, spectrogram_path)
         spectrograms.append(spectrogram_path)
 
-        # Clear cache after processing each chunk
         gc.collect()
         torch.cuda.empty_cache()
 
-    # Combine all audio chunks
-    combined_audio = np.concatenate(results)
-
-    if remove_silence:
-        gr.Info("Removing audio silences... This may take a moment")
-        non_silent_intervals = librosa.effects.split(combined_audio, top_db=30)
-        non_silent_wave = np.array([])
-        for interval in non_silent_intervals:
-            start, end = interval
-            non_silent_wave = np.concatenate([non_silent_wave, combined_audio[start:end]])
-        combined_audio = non_silent_wave
-
+    # Process audio with pauses
+    combined_audio = process_audio_with_pauses(results, target_sample_rate, chunk_info, remove_silence)
     # Generate final spectrogram
     with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp_spectrogram:
         final_spectrogram_path = tmp_spectrogram.name
         save_spectrogram(combined_audio, target_sample_rate, final_spectrogram_path)
 
-    # Final cleanup
     gc.collect()
     torch.cuda.empty_cache()
 
-    # Return combined audio and the final spectrogram
     return (target_sample_rate, combined_audio), final_spectrogram_path
+
 
 with gr.Blocks() as app:
     gr.Markdown("""
@@ -280,7 +315,6 @@ If you're having issues, try converting your reference audio to WAV or MP3, clip
     with gr.Accordion("Advanced Settings", open=False):
         ref_text_input = gr.Textbox(label="Reference Text", info="Leave blank to automatically transcribe the reference audio. If you enter text it will override automatic transcription.", lines=2)
         remove_silence = gr.Checkbox(label="Remove Silences", info="The model tends to produce silences, especially on longer audio. We can manually remove silences if needed. Note that this is an experimental feature and may produce strange results. This will also increase generation time.", value=True)
-
     audio_output = gr.Audio(label="Synthesized Audio")
     spectrogram_output = gr.Image(label="Spectrogram")
 
