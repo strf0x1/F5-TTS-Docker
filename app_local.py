@@ -21,17 +21,16 @@ from model.utils import (
 from transformers import pipeline
 import librosa
 import re
+import gc
+import matplotlib.pyplot as plt
 
 device = "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
 
+gc.collect()
+torch.cuda.empty_cache()
+
 print(f"Using {device} device")
 
-pipe = pipeline(
-    "automatic-speech-recognition",
-    model="openai/whisper-large-v3-turbo",
-    torch_dtype=torch.float16,
-    device=device,
-)
 
 # --------------------- Settings -------------------- #
 
@@ -98,6 +97,16 @@ def chunk_text(text, max_chars=200):
     
     return chunks
 
+def save_spectrogram(y, sr, path):
+    plt.figure(figsize=(10, 4))
+    D = librosa.amplitude_to_db(np.abs(librosa.stft(y)), ref=np.max)
+    librosa.display.specshow(D, sr=sr, x_axis='time', y_axis='hz')
+    plt.colorbar(format='%+2.0f dB')
+    plt.title('Spectrogram')
+    plt.tight_layout()
+    plt.savefig(path)
+    plt.close()
+
 def infer(ref_audio_orig, ref_text, gen_text, exp_name, remove_silence):
     print(gen_text)
     chunks = chunk_text(gen_text)
@@ -127,6 +136,13 @@ def infer(ref_audio_orig, ref_text, gen_text, exp_name, remove_silence):
     # Transcribe reference audio if needed
     if not ref_text.strip():
         gr.Info("No reference text provided, transcribing reference audio...")
+        # Initialize Whisper model
+        pipe = pipeline(
+            "automatic-speech-recognition",
+            model="openai/whisper-large-v3-Turbo", # You can set this to large-V3 if you want better quality, but VRAM then goes to 10 GB
+            torch_dtype=torch.float16,
+            device=device,
+        )
         ref_text = pipe(
             ref_audio,
             chunk_length_s=30,
@@ -134,7 +150,12 @@ def infer(ref_audio_orig, ref_text, gen_text, exp_name, remove_silence):
             generate_kwargs={"task": "transcribe"},
             return_timestamps=False,
         )['text'].strip()
-        gr.Info("Finished transcription")
+        print("\nTranscribed text: ", ref_text) # Degug transcribing quality
+        gr.Info("\nFinished transcription")
+        # Release Whisper model
+        del pipe
+        torch.cuda.empty_cache()
+        gc.collect()
     else:
         gr.Info("Using custom reference text...")
 
@@ -152,8 +173,8 @@ def infer(ref_audio_orig, ref_text, gen_text, exp_name, remove_silence):
     results = []
     spectrograms = []
     
-    for chunk in chunks:
-        gr.Info(f"Processing chunk: {chunk[:30]}...")
+    for i, chunk in enumerate(chunks):
+        gr.Info(f"Processing chunk {i+1}/{len(chunks)}: {chunk[:30]}...")
         
         # Prepare the text
         text_list = [ref_text + chunk]
@@ -180,22 +201,33 @@ def infer(ref_audio_orig, ref_text, gen_text, exp_name, remove_silence):
 
         generated = generated[:, ref_audio_len:, :]
         generated_mel_spec = rearrange(generated, '1 n d -> 1 d n')
+        
+        # Clear unnecessary tensors
+        del generated
+        torch.cuda.empty_cache()
+        
         gr.Info("Running vocoder")
         vocos = Vocos.from_pretrained("charactr/vocos-mel-24khz")
         generated_wave = vocos.decode(generated_mel_spec.cpu())
         if rms < target_rms:
             generated_wave = generated_wave * rms / target_rms
 
-        # Convert to numpy
+        # Convert to numpy and clear GPU tensors
         generated_wave = generated_wave.squeeze().cpu().numpy()
+        del generated_mel_spec
+        torch.cuda.empty_cache()
 
         results.append(generated_wave)
 
         # Generate spectrogram
         with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp_spectrogram:
             spectrogram_path = tmp_spectrogram.name
-            save_spectrogram(generated_mel_spec[0].cpu().numpy(), spectrogram_path)
+            save_spectrogram(generated_wave, target_sample_rate, spectrogram_path)
         spectrograms.append(spectrogram_path)
+
+        # Clear cache after processing each chunk
+        gc.collect()
+        torch.cuda.empty_cache()
 
     # Combine all audio chunks
     combined_audio = np.concatenate(results)
@@ -209,8 +241,17 @@ def infer(ref_audio_orig, ref_text, gen_text, exp_name, remove_silence):
             non_silent_wave = np.concatenate([non_silent_wave, combined_audio[start:end]])
         combined_audio = non_silent_wave
 
-    # Return combined audio and the spectrogram of the last chunk
-    return (target_sample_rate, combined_audio), spectrograms[-1]
+    # Generate final spectrogram
+    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp_spectrogram:
+        final_spectrogram_path = tmp_spectrogram.name
+        save_spectrogram(combined_audio, target_sample_rate, final_spectrogram_path)
+
+    # Final cleanup
+    gc.collect()
+    torch.cuda.empty_cache()
+
+    # Return combined audio and the final spectrogram
+    return (target_sample_rate, combined_audio), final_spectrogram_path
 
 with gr.Blocks() as app:
     gr.Markdown("""
@@ -231,7 +272,7 @@ If you're having issues, try converting your reference audio to WAV or MP3, clip
 """)
 
     ref_audio_input = gr.Audio(label="Reference Audio", type="filepath")
-    gen_text_input = gr.Textbox(label="Text to Generate (for longer than 200 chars the app uses chunking)", lines=4)
+    gen_text_input = gr.Textbox(label="Text to Generate (max 200 chars.)", lines=4)
     model_choice = gr.Radio(choices=["F5-TTS", "E2-TTS"], label="Choose TTS Model", value="F5-TTS")
     generate_btn = gr.Button("Synthesize", variant="primary")
     with gr.Accordion("Advanced Settings", open=False):
