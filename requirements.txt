@@ -20,5 +20,7 @@ wandb
 x_transformers>=1.31.14
 zhconv
 zhon
-gradio==5.0.1
-cached_path==1.6.3
+gradio
+cached_path
+huggingface-hub>=0.25.1,<0.26.0
+
