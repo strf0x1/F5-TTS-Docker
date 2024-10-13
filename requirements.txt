@@ -20,5 +20,5 @@ wandb
 x_transformers>=1.31.14
 zhconv
 zhon
-gradio=5.0.2
-cached_path0=1.6.3
+gradio==5.0.1
+cached_path==1.6.3
