@@ -161,6 +161,8 @@ def infer(ref_audio_orig, ref_text, gen_text, exp_name, remove_silence):
 
     # Load and preprocess reference audio
     audio, sr = torchaudio.load(ref_audio)
+    if audio.shape[0] > 1:
+        audio = torch.mean(audio, dim=0, keepdim=True) # convert to mono
     rms = torch.sqrt(torch.mean(torch.square(audio)))
     if rms < target_rms:
         audio = audio * target_rms / rms
@@ -272,7 +274,7 @@ If you're having issues, try converting your reference audio to WAV or MP3, clip
 """)
 
     ref_audio_input = gr.Audio(label="Reference Audio", type="filepath")
-    gen_text_input = gr.Textbox(label="Text to Generate (max 200 chars.)", lines=4)
+    gen_text_input = gr.Textbox(label="Text to Generate (for longer than 200 chars the app uses chunking)", lines=4)
     model_choice = gr.Radio(choices=["F5-TTS", "E2-TTS"], label="Choose TTS Model", value="F5-TTS")
     generate_btn = gr.Button("Synthesize", variant="primary")
     with gr.Accordion("Advanced Settings", open=False):
