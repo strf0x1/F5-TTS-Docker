@@ -2,8 +2,9 @@
 <span style="color: red;">
 This updated version introduces **chunking of the input text**, allowing for the generation of **audio files of any length** without limitations. Additionally, the **VRAM usage** remains under **8 GB**.
 </span>
+
 # F5-TTS: A Fairytaler that Fakes Fluent and Faithful Speech with Flow Matching
--------------------
+
 [![arXiv](https://img.shields.io/badge/arXiv-2410.06885-b31b1b.svg?logo=arXiv)](https://arxiv.org/abs/2410.06885)
 [![demo](https://img.shields.io/badge/GitHub-Demo%20page-blue.svg)](https://swivid.github.io/F5-TTS/)
 [![space](https://img.shields.io/badge/🤗-Space%20demo-yellow)](https://huggingface.co/spaces/mrfakename/E2-F5-TTS) \
